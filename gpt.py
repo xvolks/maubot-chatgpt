@@ -1,24 +1,23 @@
-import asyncio
 import json
-import os
 import re
-from datetime import datetime
-
-from typing import Type, Deque, Dict
-from mautrix.client import Client
 from collections import deque, defaultdict
-from maubot.handlers import command, event
+from datetime import datetime
+from typing import Type, Deque, Dict
+
 from maubot import Plugin, MessageEvent
-from mautrix.errors import MNotFound, MatrixRequestError
-from mautrix.types import TextMessageEventContent, EventType, RoomID, UserID, MessageType
+from maubot.handlers import command, event
+from mautrix.types import EventType, RoomID, MessageType
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 
-GPT_API_URL = "https://api.openai.com/v1/chat/completions"
+GPT_API_URL: str = "{proto}://{host}:{port}/v1/chat/completions"
 EVENT_CACHE_LENGTH = 10
 
 
 class Config(BaseProxyConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
+        helper.copy("gpt_host")
+        helper.copy("gpt_port")
+        helper.copy("gpt_proto")
         helper.copy("gpt_api_key")
         helper.copy("model")
         helper.copy("max_tokens")
@@ -28,16 +27,25 @@ class Config(BaseProxyConfig):
         helper.copy("allowed_users")
         helper.copy("addl_context")
 
+
 class GPTPlugin(Plugin):
 
     prev_room_events: Dict[RoomID, Deque[Dict]]
+    name: str
 
     async def start(self) -> None:
+        global GPT_API_URL
         await super().start()
         self.config.load_and_update()
         self.name = self.config['name'] if self.config['name'] else self.client.parse_user_id(self.client.mxid)[0]
         self.log.debug(f"DEBUG gpt plugin started with bot name: {self.name}")
         self.prev_room_events = defaultdict(lambda: deque(maxlen=EVENT_CACHE_LENGTH))
+        host = self.config.get('gpt_host', 'api.openai.com')
+        port = self.config.get('gpt_port', 443)
+        proto = self.config.get('gpt_proto', "https")
+        print(f"{proto=}, {host=}, {port=}")
+        GPT_API_URL = GPT_API_URL.format(proto=proto, host=host, port=port)
+        print(GPT_API_URL)
 
     @event.on(EventType.ROOM_MESSAGE)
     async def on_message(self, event: MessageEvent) -> None:
@@ -65,7 +73,7 @@ class GPTPlugin(Plugin):
 
         try:
             # Check if the message contains the bot's ID
-            match_name = re.search("(^|\s)(@)?" + self.name + "([ :,.!?]|$)", event.content.body, re.IGNORECASE)
+            match_name = re.search(r"(^|\s)(@)?" + self.name + "([ :,.!?]|$)", event.content.body, re.IGNORECASE)
             if match_name or len(joined_members) == 2:
                 if event.content.msgtype == MessageType.NOTICE:
                     return # don't respond to other bot messages
